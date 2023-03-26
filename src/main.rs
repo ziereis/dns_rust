@@ -7,8 +7,7 @@ pub mod dns_server;
 
 
 fn main() -> io::Result<()> {
-    let mut server = DnsServer::new("0.0.0.0:53")?;
+    let mut server = DnsServer::new("127.0.0.1:2053")?;
     server.start();
     Ok(())
 }
-

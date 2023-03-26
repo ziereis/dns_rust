@@ -1,7 +1,7 @@
 mod buffer;
 
 pub mod dns_packet {
-    use std::io;
+    use std::{fmt, io};
     use std::net::{Ipv4Addr, Ipv6Addr};
     use crate::dns_server::dns_packet::buffer::buffer::BufferParser;
 
@@ -106,7 +106,7 @@ pub mod dns_packet {
         }
     }
 
-    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    #[derive(PartialEq, Eq, Clone, Copy)]
     pub struct Header {
         pub id: u16,
         pub flags1: u8,
@@ -132,8 +132,8 @@ pub mod dns_packet {
         pub fn get_query_response(&self) -> bool {
             ((self.flags1 & flags::QUERY_RESPONSE) >> 7) != 0
         }
-        pub fn get_op_code(&self) -> u8 {
-            (self.flags1 & flags::OP_CODE) >> 3
+        pub fn get_op_code(&self) -> OperationCode {
+            OperationCode::from((self.flags1 & flags::OP_CODE) >> 3)
         }
         pub fn get_authoritative_answer(&self) -> bool {
             ((self.flags1 & flags::AUTHORITATIVE_ANSWER) >> 2) !=0
@@ -150,10 +150,32 @@ pub mod dns_packet {
         pub fn get_reserved(&self) -> u8 {
             (self.flags2 & flags::RESERVED) >> 4
         }
-        pub fn get_response_code(&self) -> u8 {
-            return self.flags2 & flags::RESPONSE_CODE
+        pub fn get_response_code(&self) -> ResponseCode {
+            return ResponseCode::from(self.flags2 & flags::RESPONSE_CODE)
         }
 
+    }
+
+    impl fmt::Debug for Header {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Header")
+                .field("id", &self.id)
+                .field("flags1", &format!("{:08b}", self.flags1))
+                .field("query_response", &self.get_query_response())
+                .field("op_code", &self.get_op_code())
+                .field("authoritative_answer", &self.get_authoritative_answer())
+                .field("truncated_message", &self.get_truncated_message())
+                .field("recursion_desired", &self.get_recursion_desired())
+                .field("flags2", &format!("{:08b}", self.flags2))
+                .field("recursion_available", &self.get_recursion_available())
+                .field("reserved", &self.get_reserved())
+                .field("response_code", &self.get_response_code())
+                .field("questions", &self.questions)
+                .field("answers", &self.answers)
+                .field("authorities", &self.authorities)
+                .field("additional", &self.additional)
+                .finish()
+        }
     }
 
     #[derive(Debug, PartialEq, Eq, Clone)]
@@ -248,11 +270,11 @@ pub mod dns_packet {
 
     #[derive(Debug, PartialEq, Eq, Clone)]
     pub struct DnsPacket {
-        header: Header,
-        questions: Vec<Question>,
-        answers: Vec<Answer>,
-        authorities: Vec<Answer>,
-        additional: Vec<Answer>
+        pub header: Header,
+        pub questions: Vec<Question>,
+        pub answers: Vec<Answer>,
+        pub authorities: Vec<Answer>,
+        pub additional: Vec<Answer>
     }
 
     impl DnsPacket {
@@ -267,8 +289,6 @@ pub mod dns_packet {
                 additional: Vec::new(),
             };
 
-            println!("{:#?}", dns_packet.header);
-
             for _ in 0..dns_packet.header.questions {
                 dns_packet.questions.push(Question::from_buf(&mut parser)?);
             }
@@ -282,6 +302,38 @@ pub mod dns_packet {
                 dns_packet.additional.push(Answer::from_buf(&mut parser)?);
             }
             Ok(dns_packet)
+        }
+
+        pub fn get_ipv4_iterator<'a>(&'a self) -> impl Iterator<Item = (&Ipv4Addr, &'a str)> {
+            self.additional.iter()
+                .filter_map(|additional| match &additional.record {
+                    Record::A(ip) => Some((ip, &additional.name[..])),
+                    _ => None
+                })
+        }
+
+        pub fn get_unresolved_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = (&'a str, &'a str)>{
+            return  self.authorities.iter()
+                .filter_map(|auth| match  &auth.record {
+                    Record::NS(server) => Some((&server[..], &auth.name[..])),
+                    _ => None
+                })
+                .filter(|(server, auth_name)| qname.ends_with(&auth_name[..]))
+        }
+
+       pub fn get_resolved_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = &'a Ipv4Addr> {
+           self.get_unresolved_ns(qname)
+               .flat_map(|(server, auth_name)|
+                   self.get_ipv4_iterator()
+                       .filter( move |(ip, additional_name)|
+                           if *additional_name == server {
+                               return true;
+                           } else {
+                               return false;
+                           }
+                       )
+                          .map(|(ip, _)| ip))
+
         }
     }
 

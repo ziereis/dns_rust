@@ -138,14 +138,80 @@ pub mod buffer {
         }
     }
 
-
-    #[test]
-    fn test_read_u16() {
-/*        let b1: u8 = 0b1000_000;
-        let b2: u8 = 0b0001_000;
-        let result = b1 as u16 << 8 | b2 as u16
-*/
+    pub struct BufferBuilder<'a> {
+        pub(crate) buf_view: &'a mut [u8],
+        position: usize,
     }
 
+    impl<'a> BufferBuilder<'a> {
+        pub fn new(buf_view: &'a mut [u8]) -> Self {
+            BufferBuilder {
+                buf_view,
+                position: 0,
+            }
+        }
+
+        pub fn seek(&mut self, pos: usize) {
+            self.position = pos;
+        }
+
+        pub fn get_pos(&self) -> usize {
+            self.position
+        }
+
+        fn ensure_space(&self, len: usize) -> io::Result<()> {
+            if self.position + len > self.buf_view.len() {
+                return Err(Error::new(ErrorKind::InvalidInput, "End of buffer"));
+            }
+            Ok(())
+        }
+
+        pub fn write(&mut self, val: u8) -> io::Result<()> {
+            self.ensure_space(1)?;
+            self.buf_view[self.position] = val;
+            self.position += 1;
+            Ok(())
+        }
+
+        pub fn write_u16(&mut self, val: u16) -> io::Result<()> {
+            self.ensure_space(2)?;
+            let bytes = val.to_be_bytes();
+            self.buf_view[self.position..self.position + 2].copy_from_slice(&bytes);
+            self.position += 2;
+            Ok(())
+        }
+
+        pub fn write_u32(&mut self, val: u32) -> io::Result<()> {
+            self.ensure_space(4)?;
+            let bytes = val.to_be_bytes();
+            self.buf_view[self.position..self.position + 4].copy_from_slice(&bytes);
+            self.position += 4;
+            Ok(())
+        }
+
+        pub fn write_u128(&mut self, val: u128) -> io::Result<()> {
+            self.ensure_space(16)?;
+            let bytes = val.to_be_bytes();
+            self.buf_view[self.position..self.position + 16].copy_from_slice(&bytes);
+            self.position += 16;
+            Ok(())
+        }
+
+        pub fn write_name(&mut self, name: &str) -> io::Result<()> {
+            for label in name.split('.') {
+                let len = label.len();
+                if len > 63 {
+                    return Err(Error::new(ErrorKind::InvalidInput, "Label too long"));
+                }
+                self.write(len as u8)?;
+                self.ensure_space(len)?;
+                self.buf_view[self.position..self.position + len].copy_from_slice(label.as_bytes());
+                self.position += len;
+            }
+            self.write(0)?; // Write null byte to terminate the name
+            Ok(())
+        }
+    }
 }
+
 

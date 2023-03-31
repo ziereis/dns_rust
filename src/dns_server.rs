@@ -3,9 +3,10 @@ pub mod dns_packet;
 pub mod dns_server {
     use std::io;
     use std::io::{Error, ErrorKind};
-    use std::net::{AddrParseError, Ipv4Addr, UdpSocket};
+    use std::net::{ Ipv4Addr, UdpSocket};
     use std::str::FromStr;
-    use crate::dns_server::dns_packet::dns_packet::{DnsPacket, ResponseCode};
+    use crate::dns_server::dns_packet::buffer::buffer::BufferBuilder;
+    use crate::dns_server::dns_packet::dns_packet::{DnsPacket, Header, QueryType, Question, ResponseCode};
 
     const ROOT_SERVER_STRS: [&str; 13] = ["198.41.0.4",
                                         "199.9.14.201",
@@ -26,6 +27,7 @@ pub mod dns_server {
         client_socket: UdpSocket,
         lookup_socket: UdpSocket,
         buf: [u8;512],
+        root_server_ips: Vec<Ipv4Addr>,
     }
 
     impl DnsServer {
@@ -34,6 +36,12 @@ pub mod dns_server {
                 client_socket: UdpSocket::bind(addr)?,
                 lookup_socket: UdpSocket::bind("0.0.0.0:3267")?,
                 buf: [0; 512],
+                root_server_ips: ROOT_SERVER_STRS
+                    .iter()
+                    .filter_map(|ip_str | match Ipv4Addr::from_str(ip_str) {
+                        Ok(ip) => Some(ip),
+                        _ => None,
+                    }).collect(),
             })
         }
 
@@ -49,20 +57,45 @@ pub mod dns_server {
                     println!("finished");
                     return Ok((amt, buf));
                 }
-                else if packet.header.additional > 0 {
+                else if packet.header.additional_count > 0 {
                     println!("starting recursive lookup with additional");
-                    let ns = packet.get_resolved_ns(&packet.questions.first().expect("123").name);
-                    let (amt, buf) = self.recursive_lookup(&out_buf, ns)?;
+                    let ips = packet.get_resolved_ns(&packet.questions.first().expect("123").name);
+                    let (amt, buf) = self.recursive_lookup(&out_buf, ips)?;
                     return Ok((amt,buf));
                 }
-                else if packet.header.authorities > 0 {
-                    return Err(Error::new(ErrorKind::InvalidInput, "no additional"));
+                else if packet.header.authoritiy_count > 0 {
+                    println!("starting recursive lookup without additional");
+                    let name_servers = packet.get_unresolved_ns(&packet.questions.first().expect("123").name);
+                    for (server_name, _) in name_servers {
+                        let mut packet  = DnsPacket::new(
+                            Header::new(1, true, false, ResponseCode::NOERROR));
+                        packet.add_question(Question{
+                            name: server_name.to_string(),
+                            query_type: QueryType::A,
+                            class: 1,
+                        });
+                        println!("{:#?}", packet);
+                        let buf_size;
+                        let mut buf = [0u8; 512];
+                        {
+                            let mut builder = BufferBuilder::new(&mut buf);
+                            packet.write_to_buf(&mut builder)?;
+                            buf_size = builder.get_pos();
+                        }
+                        let (amt, rcv_buf) = self.recursive_lookup(&buf[0..buf_size], self.root_server_ips.iter())?;
+                        let packet = DnsPacket::from_buf(&rcv_buf[0..amt])?;
+                        let ips = packet.get_ipv4_iterator_answers();
+                        let (amt, buf) = self.recursive_lookup(&out_buf, ips)?;
+                        return Ok((amt,buf));
+                    }
                 }
-
-                return Err(Error::new(ErrorKind::InvalidInput, "rec lookup error"));
+                else {
+                    return Err(Error::new(ErrorKind::InvalidInput, "packet contains nothing"));
+                }
             }
             return Err(Error::new(ErrorKind::InvalidInput, "rec lookup error"));
         }
+
         pub fn lookup(&self, addr: &Ipv4Addr, out_buf: &[u8]) -> io::Result<(usize,[u8;512])> {
             self.lookup_socket.send_to(&out_buf, (*addr,53 as u16))?;
             let mut buf =  [0u8;512];
@@ -76,17 +109,8 @@ pub mod dns_server {
                     .expect("could recv packet from client");
                 let in_packet = DnsPacket::from_buf(&self.buf).
                     expect("could parse packet from client");
-                //println!("{:#?}", in_packet);
-                let root_server_ips: Vec<Ipv4Addr> = ROOT_SERVER_STRS
-                    .iter()
-                    .filter_map(|&ip_str | match Ipv4Addr::from_str(ip_str) {
-                        Ok(ip) => Some(ip),
-                        _ => None,
-                    }).collect();
-
-                let (amt, buf) = self.recursive_lookup(&self.buf[0..amt], root_server_ips.iter()).expect("lookup failed");
-                let out_packet = DnsPacket::from_buf(&buf)
-                    .expect("could parse packet from server");
+                println!("{:#?}", in_packet);
+                let (amt, buf) = self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()).expect("lookup failed");
                 self.client_socket.send_to(&buf[0..amt],client)
                     .expect("couldnt return packet to client");
 

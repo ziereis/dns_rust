@@ -1,9 +1,9 @@
-mod buffer;
+pub(crate) mod buffer;
 
 pub mod dns_packet {
     use std::{fmt, io};
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use crate::dns_server::dns_packet::buffer::buffer::BufferParser;
+    use crate::dns_server::dns_packet::buffer::buffer::{BufferBuilder, BufferParser};
 
     pub mod flags {
         pub const QUERY_RESPONSE: u8 = 0b1000_0000;
@@ -49,6 +49,21 @@ pub mod dns_packet {
                 _ => ResponseCode::UNKNOWN,
             }
         }
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                ResponseCode::NOERROR => 0,
+                ResponseCode::FORMERR => 1,
+                ResponseCode::SERVFAIL => 2,
+                ResponseCode::NXDOMAIN => 3,
+                ResponseCode::NOTIMP => 4,
+                ResponseCode::REFUSED => 5,
+                ResponseCode::YXDOMAIN => 6,
+                ResponseCode::XRRSET => 7,
+                ResponseCode::NOTAUTH => 8,
+                ResponseCode::NOTZONE => 9,
+                ResponseCode::UNKNOWN => 2,
+            }
+        }
     }
 
     #[derive(Debug, PartialEq, Eq, Clone)]
@@ -72,13 +87,13 @@ pub mod dns_packet {
             }
         }
         pub fn to_u16(&self) -> u16 {
-            match *self {
+            match self {
                 QueryType::A => 1,
                 QueryType::NS => 2,
                 QueryType::CNAME => 5,
                 QueryType::MX => 15,
                 QueryType::AAAA => 28,
-                QueryType::UNKOWN(x) => x,
+                QueryType::UNKOWN(x) => *x,
             }
         }
     }
@@ -111,10 +126,10 @@ pub mod dns_packet {
         pub id: u16,
         pub flags1: u8,
         pub flags2: u8,
-        pub questions: u16,
-        pub answers: u16,
-        pub authorities: u16,
-        pub additional: u16,
+        pub question_count: u16,
+        pub answer_count: u16,
+        pub authoritiy_count: u16,
+        pub additional_count: u16,
     }
 
     impl Header {
@@ -123,11 +138,38 @@ pub mod dns_packet {
                 id: buf.read_u16()?,
                 flags1: buf.read()?,
                 flags2: buf.read()?,
-                questions: buf.read_u16()?,
-                answers: buf.read_u16()?,
-                authorities: buf.read_u16()?,
-                additional: buf.read_u16()?,
+                question_count: buf.read_u16()?,
+                answer_count: buf.read_u16()?,
+                authoritiy_count: buf.read_u16()?,
+                additional_count: buf.read_u16()?,
             })
+        }
+        pub fn new(id: u16, recursion: bool, is_response: bool, response_code: ResponseCode) -> Header {
+            let mut result = Header {
+                id,
+                flags1: 0,
+                flags2: 0,
+                question_count: 0,
+                answer_count: 0,
+                authoritiy_count: 0,
+                additional_count: 0,
+            };
+            result.set_recursion_desired(recursion);
+            result.set_query_response(is_response);
+            result.set_response_code(response_code);
+            result
+        }
+
+
+        pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
+            builder.write_u16(self.id)?;
+            builder.write(self.flags1)?;
+            builder.write(self.flags2)?;
+            builder.write_u16(self.question_count)?;
+            builder.write_u16(self.answer_count)?;
+            builder.write_u16(self.authoritiy_count)?;
+            builder.write_u16(self.additional_count)?;
+            Ok(())
         }
         pub fn get_query_response(&self) -> bool {
             ((self.flags1 & flags::QUERY_RESPONSE) >> 7) != 0
@@ -153,6 +195,61 @@ pub mod dns_packet {
         pub fn get_response_code(&self) -> ResponseCode {
             return ResponseCode::from(self.flags2 & flags::RESPONSE_CODE)
         }
+        pub fn set_query_response(&mut self, value: bool) {
+            if value {
+                self.flags1 |= flags::QUERY_RESPONSE;
+            } else {
+                self.flags1 &= !flags::QUERY_RESPONSE;
+            }
+        }
+
+        pub fn set_op_code(&mut self, value: OperationCode) {
+            self.flags1 &= !flags::OP_CODE;
+            self.flags1 |= (value as u8) << 3;
+        }
+
+        pub fn set_authoritative_answer(&mut self, value: bool) {
+            if value {
+                self.flags1 |= flags::AUTHORITATIVE_ANSWER;
+            } else {
+                self.flags1 &= !flags::AUTHORITATIVE_ANSWER;
+            }
+        }
+
+        pub fn set_truncated_message(&mut self, value: bool) {
+            if value {
+                self.flags1 |= flags::TRUNCATED_MESSAGE;
+            } else {
+                self.flags1 &= !flags::TRUNCATED_MESSAGE;
+            }
+        }
+
+        pub fn set_recursion_desired(&mut self, value: bool) {
+            if value {
+                self.flags1 |= flags::RECURSION_DESIRED;
+            } else {
+                self.flags1 &= !flags::RECURSION_DESIRED;
+            }
+        }
+
+        pub fn set_recursion_available(&mut self, value: bool) {
+            if value {
+                self.flags2 |= flags::RECURSION_AVAILABLE;
+            } else {
+                self.flags2 &= !flags::RECURSION_AVAILABLE;
+            }
+        }
+
+        pub fn set_reserved(&mut self, value: u8) {
+            self.flags2 &= !flags::RESERVED;
+            self.flags2 |= value << 4;
+        }
+
+        pub fn set_response_code(&mut self, value: ResponseCode) {
+            self.flags2 &= !flags::RESPONSE_CODE;
+            self.flags2 |= value.to_u8();
+        }
+
 
     }
 
@@ -170,10 +267,10 @@ pub mod dns_packet {
                 .field("recursion_available", &self.get_recursion_available())
                 .field("reserved", &self.get_reserved())
                 .field("response_code", &self.get_response_code())
-                .field("questions", &self.questions)
-                .field("answers", &self.answers)
-                .field("authorities", &self.authorities)
-                .field("additional", &self.additional)
+                .field("questions", &self.question_count)
+                .field("answers", &self.answer_count)
+                .field("authorities", &self.authoritiy_count)
+                .field("additional", &self.additional_count)
                 .finish()
         }
     }
@@ -221,7 +318,29 @@ pub mod dns_packet {
             Ok(result)
         }
 
+        pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
+            match self {
+                Record::A(addr) => {
+                    builder.write_u32(u32::from(*addr))?;
+                }
+                Record::NS(name) | Record::CNAME(name) => {
+                    builder.write_name(name)?;
+                }
+                Record::MX { priority, host } => {
+                    builder.write_u16(*priority)?;
+                    builder.write_name(host)?;
+                }
+                Record::AAAA(addr) => {
+                    builder.write_u128(u128::from(*addr))?;
+                }
+                Record::UNKOWN(_) => {
+                    // do nothing
+                }
+            }
+            Ok(())
+        }
     }
+
 
     #[derive(Debug, PartialEq, Eq, Clone)]
     pub struct Answer {
@@ -249,6 +368,16 @@ pub mod dns_packet {
                 record: Record::from_buf(buf ,len_, query_type_)?,
             })
         }
+
+        pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
+            builder.write_name(&self.name)?;
+            builder.write_u16(self.query_type.to_u16())?;
+            builder.write_u16(self.class)?;
+            builder.write_u32(self.ttl)?;
+            builder.write_u16(self.len)?;
+            self.record.write_to_buf(builder)?;
+            Ok(())
+        }
     }
 
     #[derive(Debug, PartialEq, Eq, Clone)]
@@ -265,6 +394,12 @@ pub mod dns_packet {
                 query_type: QueryType::from(buf.read_u16()?),
                 class: buf.read_u16()?,
             })
+        }
+        pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
+            builder.write_name(&self.name)?;
+            builder.write_u16(self.query_type.to_u16())?;
+            builder.write_u16(self.class)?;
+            Ok(())
         }
     }
 
@@ -289,25 +424,77 @@ pub mod dns_packet {
                 additional: Vec::new(),
             };
 
-            for _ in 0..dns_packet.header.questions {
+            for _ in 0..dns_packet.header.question_count {
                 dns_packet.questions.push(Question::from_buf(&mut parser)?);
             }
-            for _ in 0..dns_packet.header.answers {
+            for _ in 0..dns_packet.header.answer_count {
                 dns_packet.answers.push(Answer::from_buf(&mut parser)?);
             }
-            for _ in 0..dns_packet.header.authorities {
+            for _ in 0..dns_packet.header.authoritiy_count {
                 dns_packet.authorities.push(Answer::from_buf(&mut parser)?);
             }
-            for _ in 0..dns_packet.header.additional {
+            for _ in 0..dns_packet.header.additional_count {
                 dns_packet.additional.push(Answer::from_buf(&mut parser)?);
             }
             Ok(dns_packet)
         }
 
-        pub fn get_ipv4_iterator<'a>(&'a self) -> impl Iterator<Item = (&Ipv4Addr, &'a str)> {
+        pub fn new(header: Header) -> DnsPacket {
+            DnsPacket {
+                header,
+                questions: vec![],
+                answers: vec![],
+                authorities: vec![],
+                additional: vec![],
+            }
+        }
+
+        pub fn add_question(&mut self, question: Question) {
+            self.questions.push(question);
+            self.header.question_count += 1;
+        }
+        pub fn add_answer(&mut self, answer: Answer) {
+            self.answers.push(answer);
+            self.header.answer_count += 1;
+        }
+        pub fn add_authority(&mut self, auth: Answer) {
+            self.authorities.push(auth);
+            self.header.authoritiy_count += 1;
+        }
+        pub fn add_additional(&mut self, additional: Answer) {
+            self.additional.push(additional);
+            self.header.additional_count += 1;
+        }
+
+        pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
+            self.header.write_to_buf(builder)?;
+            for q in &self.questions {
+                q.write_to_buf(builder)?
+            }
+            for a in &self.answers {
+                a.write_to_buf(builder)?
+            }
+            for a in &self.authorities {
+                a.write_to_buf(builder)?
+            }
+            for a in &self.additional {
+                a.write_to_buf(builder)?
+            }
+            Ok(())
+        }
+
+        pub fn get_ipv4_iterator_additional<'a>(&'a self) -> impl Iterator<Item = (&Ipv4Addr, &'a str)> {
             self.additional.iter()
                 .filter_map(|additional| match &additional.record {
                     Record::A(ip) => Some((ip, &additional.name[..])),
+                    _ => None
+                })
+        }
+
+        pub fn get_ipv4_iterator_answers(&self) -> impl Iterator<Item=&Ipv4Addr> {
+            self.answers.iter()
+                .filter_map(|additional| match &additional.record {
+                    Record::A(ip) => Some(ip),
                     _ => None
                 })
         }
@@ -318,14 +505,14 @@ pub mod dns_packet {
                     Record::NS(server) => Some((&server[..], &auth.name[..])),
                     _ => None
                 })
-                .filter(|(server, auth_name)| qname.ends_with(&auth_name[..]))
+                .filter(|(_, auth_name)| qname.ends_with(auth_name))
         }
 
        pub fn get_resolved_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = &'a Ipv4Addr> {
            self.get_unresolved_ns(qname)
-               .flat_map(|(server, auth_name)|
-                   self.get_ipv4_iterator()
-                       .filter( move |(ip, additional_name)|
+               .flat_map(|(server, _)|
+                   self.get_ipv4_iterator_additional()
+                       .filter( move |(_, additional_name)|
                            if *additional_name == server {
                                return true;
                            } else {
@@ -335,6 +522,7 @@ pub mod dns_packet {
                           .map(|(ip, _)| ip))
 
         }
+
     }
 
 }

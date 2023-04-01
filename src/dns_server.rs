@@ -6,6 +6,7 @@ pub mod dns_server {
     use std::io::{Error, ErrorKind};
     use std::net::{ Ipv4Addr, UdpSocket};
     use std::str::FromStr;
+    use std::time::Duration;
     use crate::dns_server::dns_packet::buffer::buffer::BufferBuilder;
     use crate::dns_server::dns_packet::dns_packet::{DnsPacket, Header, QueryType, Question, ResponseCode};
 
@@ -104,6 +105,7 @@ pub mod dns_server {
         }
 
         pub fn start(&mut self) {
+            self.lookup_socket.set_read_timeout(Some(Duration::new(0, 5000))).unwrap();
             loop {
                 let (amt, client) = self.client_socket.recv_from(&mut self.buf)
                     .expect("could recv packet from client");

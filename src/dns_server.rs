@@ -1,6 +1,7 @@
 pub mod dns_packet;
 
 pub mod dns_server {
+    use std::fmt::format;
     use std::io;
     use std::io::{Error, ErrorKind};
     use std::net::{ Ipv4Addr, UdpSocket};
@@ -50,7 +51,7 @@ pub mod dns_server {
                 println!("looking up ip: {:#?}", addr);
                 let (amt, buf) = self.lookup(addr, &out_buf)?;
                 let packet = DnsPacket::from_buf(&buf[0..amt])?;
-                println!("{:#?}", packet);
+                //println!("{:#?}", packet);
                 let res_code = packet.header.get_response_code();
                 if !packet.answers.is_empty() &&
                    (res_code == ResponseCode::NOERROR || res_code == ResponseCode::NXDOMAIN) {
@@ -74,7 +75,6 @@ pub mod dns_server {
                             query_type: QueryType::A,
                             class: 1,
                         });
-                        println!("{:#?}", packet);
                         let buf_size;
                         let mut buf = [0u8; 512];
                         {
@@ -109,10 +109,21 @@ pub mod dns_server {
                     .expect("could recv packet from client");
                 let in_packet = DnsPacket::from_buf(&self.buf).
                     expect("could parse packet from client");
-                println!("{:#?}", in_packet);
-                let (amt, buf) = self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()).expect("lookup failed");
-                self.client_socket.send_to(&buf[0..amt],client)
-                    .expect("couldnt return packet to client");
+                match in_packet.questions.first().unwrap().query_type {
+                    QueryType::UNKOWN(_) =>  {
+                        ()
+                    }
+                    _ =>  {
+                        println!("{:?}", in_packet);
+                        match self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()) {
+                            Ok((amt, buf)) =>  {
+                                self.client_socket.send_to(&buf[0..amt],client)
+                                    .expect("couldnt return packet to client");
+                            }
+                            Err(_) => ()
+                        }
+                    }
+                }
 
             }
         }

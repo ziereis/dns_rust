@@ -7,6 +7,7 @@ pub mod dns_server {
     use std::net::{ Ipv4Addr, UdpSocket};
     use std::str::FromStr;
     use std::time::Duration;
+    use async_std::net::UdpSocket as AsyncUdpSocket;
     use crate::dns_server::dns_packet::buffer::buffer::BufferBuilder;
     use crate::dns_server::dns_packet::dns_packet::{DnsPacket, Header, QueryType, Question, ResponseCode};
 
@@ -26,16 +27,16 @@ pub mod dns_server {
                                         ];
 
     pub struct DnsServer {
-        client_socket: UdpSocket,
+        client_socket: AsyncUdpSocket,
         lookup_socket: UdpSocket,
         buf: [u8;512],
         root_server_ips: Vec<Ipv4Addr>,
     }
 
     impl DnsServer {
-        pub fn new(addr: &str) -> io::Result<DnsServer> {
-            Ok(DnsServer {
-                client_socket: UdpSocket::bind(addr)?,
+        pub async fn new(addr: &str) -> io::Result<DnsServer> {
+            let mut server = DnsServer {
+                client_socket: AsyncUdpSocket::bind(addr).await?,
                 lookup_socket: UdpSocket::bind("0.0.0.0:3267")?,
                 buf: [0; 512],
                 root_server_ips: ROOT_SERVER_STRS
@@ -44,7 +45,9 @@ pub mod dns_server {
                         Ok(ip) => Some(ip),
                         _ => None,
                     }).collect(),
-            })
+            };
+            server.lookup_socket.set_read_timeout(Some(Duration::new(1, 0)))?;
+            Ok(server)
         }
 
         pub fn recursive_lookup<'a>(&self, out_buf: &[u8], ips: impl Iterator<Item = &'a Ipv4Addr>) -> io::Result<(usize, [u8;512])> {
@@ -104,10 +107,34 @@ pub mod dns_server {
             Ok((amt, buf))
         }
 
-        pub fn start(&mut self) {
-            self.lookup_socket.set_read_timeout(Some(Duration::new(0, 5000))).unwrap();
+/*        pub async fn process_request(&mut self) {
+            self.client_socket.recv_from(&mut self.buf)
+                .await
+                .expect("couldnt recv packet from client");
+            let in_packet = DnsPacket::from_buf(&self.buf)
+                .expect("couldnt parse packet from client");
+
+            match in_packet.questions.first().unwrap().query_type {
+                QueryType::UNKOWN(_) =>  {
+                    ()
+                }
+                _ =>  {
+                    println!("{:?}", in_packet);
+                    match self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()) {
+                        Ok((amt, buf)) =>  {
+                            self.client_socket.send_to(&buf[0..amt],client)
+                                .await
+                                .expect("couldnt return packet to client");
+                        }
+                        Err(_) => ()
+                    }
+                }
+        }
+*/
+        pub async fn start(&mut self) {
             loop {
                 let (amt, client) = self.client_socket.recv_from(&mut self.buf)
+                    .await
                     .expect("could recv packet from client");
                 let in_packet = DnsPacket::from_buf(&self.buf).
                     expect("could parse packet from client");
@@ -120,6 +147,7 @@ pub mod dns_server {
                         match self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()) {
                             Ok((amt, buf)) =>  {
                                 self.client_socket.send_to(&buf[0..amt],client)
+                                    .await
                                     .expect("couldnt return packet to client");
                             }
                             Err(_) => ()

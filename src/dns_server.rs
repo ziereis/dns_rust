@@ -4,7 +4,7 @@ pub mod dns_server {
     use std::fmt::format;
     use std::io;
     use std::io::{Error, ErrorKind};
-    use std::net::{ Ipv4Addr};
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::str::FromStr;
     use std::time::Duration;
     use tokio::net::UdpSocket;
@@ -76,14 +76,8 @@ pub mod dns_server {
                             query_type: QueryType::A,
                             class: 1,
                         });
-                        let buf_size;
-                        let mut buf = [0u8; 512];
-                        {
-                            let mut builder = BufferBuilder::new(&mut buf);
-                            packet.write_to_buf(&mut builder)?;
-                            buf_size = builder.get_pos();
-                        }
-                        let packet_ns = self.recursive_lookup(&buf[0..buf_size], self.root_server_ips.iter()).await?;
+                        let (buf, bytes_written) = packet.to_buf()?;
+                        let packet_ns = self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await?;
                         let ips = packet_ns.get_ipv4_iterator_answers();
                         let packet = self.recursive_lookup(&out_buf, ips).await?;
                         return Ok(packet);
@@ -103,8 +97,9 @@ pub mod dns_server {
             Ok(DnsPacket::from_buf(&buf[0..amt])?)
         }
 
-        pub async fn resolve_request(&mut self) {
-
+        pub async fn resolve_request(&mut self, client: SocketAddr, packet: DnsPacket) -> io::Result<()> {
+            let (buf, bytes_written) = packet.to_buf()?;
+            Ok(())
         }
 
         pub async fn start(&mut self) {
@@ -122,14 +117,8 @@ pub mod dns_server {
                         println!("{:?}", in_packet);
                         match self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()).await {
                             Ok(packet) =>  {
-                                let mut buf = [0u8;512];
-                                let bytes_written;
-                                {
-                                    let mut builder =BufferBuilder::new(&mut buf);
-                                    packet.write_to_buf(&mut builder)
-                                        .expect("couldnt wirte to buf");
-                                    bytes_written = builder.get_pos();
-                                }
+                                let (buf, bytes_written) = packet.to_buf()
+                                    .expect("couldnt convert packet into buffer");
                                 self.client_socket.send_to(&buf[..bytes_written],client)
                                     .await
                                     .expect("couldnt return packet to client");

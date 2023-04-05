@@ -1,6 +1,5 @@
 use std::io;
 use std::net::UdpSocket;
-use futures::executor::block_on;
 use crate::dns_server::dns_packet::dns_packet::DnsPacket;
 use crate::dns_server::dns_server::DnsServer;
 

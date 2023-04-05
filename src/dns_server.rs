@@ -97,8 +97,19 @@ pub mod dns_server {
             Ok(DnsPacket::from_buf(&buf[0..amt])?)
         }
 
-        pub async fn resolve_request(&mut self, client: SocketAddr, packet: DnsPacket) -> io::Result<()> {
-            let (buf, bytes_written) = packet.to_buf()?;
+        pub async fn resolve_request(&mut self, client: SocketAddr, in_packet: DnsPacket) -> io::Result<()> {
+            let out_packet = match in_packet.questions.first().unwrap().query_type {
+                QueryType::UNKOWN(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::NOTIMP)),
+                _ =>  {
+                    let (buf, bytes_written) = in_packet.to_buf()?;
+                    match &self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await {
+                        Ok(packet) => packet,
+                        Err(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::SERVFAIL)),
+                    }
+                },
+            };
+            let (buf, bytes_written) = out_packet.to_buf()?;
+            self.client_socket.send_to(&buf[..bytes_written],client).await?;
             Ok(())
         }
 

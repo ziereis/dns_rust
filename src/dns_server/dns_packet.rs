@@ -485,10 +485,14 @@ pub mod dns_packet {
 
         pub fn to_buf(&self) -> io::Result<([u8;512], usize)> {
             let mut buf = [0u8;512];
-            let mut builder =BufferBuilder::new(&mut buf);
-            self.write_to_buf(&mut builder)
-                .expect("couldnt wirte to buf");
-            Ok((buf, builder.get_pos()))
+            let bytes_written;
+            {
+                let mut builder =BufferBuilder::new(&mut buf);
+                self.write_to_buf(&mut builder)?;
+                bytes_written = builder.get_pos();
+            }
+
+            Ok((buf, bytes_written))
         }
 
         pub fn get_ipv4_iterator_additional<'a>(&'a self) -> impl Iterator<Item = (&Ipv4Addr, &'a str)> {

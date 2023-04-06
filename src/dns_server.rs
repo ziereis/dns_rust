@@ -1,11 +1,14 @@
 pub mod dns_packet;
 
 pub mod dns_server {
+    use std::borrow::{Borrow, BorrowMut};
     use std::fmt::format;
     use std::io;
     use std::io::{Error, ErrorKind};
     use std::net::{Ipv4Addr, SocketAddr};
+    use std::rc::Rc;
     use std::str::FromStr;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::UdpSocket;
     use async_recursion::async_recursion;
@@ -49,7 +52,7 @@ pub mod dns_server {
         }
 
         #[async_recursion]
-        pub async fn recursive_lookup<'a>(&self, out_buf: &[u8], ips: impl Iterator<Item = &'a Ipv4Addr> + std::marker::Send) -> io::Result<DnsPacket> {
+        pub async fn recursive_lookup<'a>(&self, out_buf: &[u8], ips: impl Iterator<Item = &'a Ipv4Addr> + std::marker::Send + 'async_recursion) -> io::Result<DnsPacket> {
             for addr in ips {
                 println!("looking up ip: {:#?}", addr);
                 let packet = self.lookup(addr, &out_buf).await?;
@@ -97,49 +100,35 @@ pub mod dns_server {
             Ok(DnsPacket::from_buf(&buf[0..amt])?)
         }
 
-        pub async fn resolve_request(&mut self, client: SocketAddr, in_packet: DnsPacket) -> io::Result<()> {
+        pub async fn resolve_request(self: Arc<Self>, client: SocketAddr, in_packet: DnsPacket) {
             let out_packet = match in_packet.questions.first().unwrap().query_type {
                 QueryType::UNKOWN(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::NOTIMP)),
                 _ =>  {
-                    let (buf, bytes_written) = in_packet.to_buf()?;
-                    match &self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await {
+                    let (buf, bytes_written) = in_packet.to_buf().unwrap();
+                    match self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await {
                         Ok(packet) => packet,
                         Err(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::SERVFAIL)),
                     }
                 },
             };
-            let (buf, bytes_written) = out_packet.to_buf()?;
-            self.client_socket.send_to(&buf[..bytes_written],client).await?;
-            Ok(())
+            let (buf, bytes_written) = out_packet.to_buf().unwrap();
+            self.client_socket.send_to(&buf[..bytes_written],client).await.unwrap();
         }
 
-        pub async fn start(&mut self) {
+        pub async fn start(self: Arc<Self>) {
             loop {
-                let (amt, client) = self.client_socket.recv_from(&mut self.buf)
+                let mut buf =  [0u8;512];
+                let (amt, client) = self.client_socket.recv_from(&mut buf)
                     .await
                     .expect("could recv packet from client");
-                let in_packet = DnsPacket::from_buf(&self.buf)
+                let in_packet = DnsPacket::from_buf(&buf)
                     .expect("could parse packet from client");
-                match in_packet.questions.first().unwrap().query_type {
-                    QueryType::UNKOWN(_) =>  {
-                        ()
-                    }
-                    _ =>  {
-                        println!("{:?}", in_packet);
-                        match self.recursive_lookup(&self.buf[0..amt], self.root_server_ips.iter()).await {
-                            Ok(packet) =>  {
-                                let (buf, bytes_written) = packet.to_buf()
-                                    .expect("couldnt convert packet into buffer");
-                                self.client_socket.send_to(&buf[..bytes_written],client)
-                                    .await
-                                    .expect("couldnt return packet to client");
-                            }
-                            Err(_) => ()
-                        }
-                    }
-                }
-
+                let self_clone = Arc::clone(&self);
+                tokio::task::spawn(async move {
+                    self_clone.resolve_request(client, in_packet).await;
+                });
             }
+
         }
     }
 

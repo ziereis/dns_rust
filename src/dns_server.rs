@@ -1,18 +1,13 @@
 pub mod dns_packet;
 
 pub mod dns_server {
-    use std::borrow::{Borrow, BorrowMut};
-    use std::fmt::format;
     use std::io;
     use std::io::{Error, ErrorKind};
     use std::net::{Ipv4Addr, SocketAddr};
-    use std::rc::Rc;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::net::UdpSocket;
     use async_recursion::async_recursion;
-    use crate::dns_server::dns_packet::buffer::buffer::BufferBuilder;
     use crate::dns_server::dns_packet::dns_packet::{DnsPacket, Header, QueryType, Question, ResponseCode};
 
     const ROOT_SERVER_STRS: [&str; 13] = ["198.41.0.4",
@@ -38,7 +33,7 @@ pub mod dns_server {
 
     impl DnsServer {
         pub async fn new(addr: &str) -> io::Result<DnsServer> {
-            let mut server = DnsServer {
+            let server = DnsServer {
                 client_socket: UdpSocket::bind(addr).await?,
                 lookup_socket: UdpSocket::bind("0.0.0.0:3267").await?,
                 root_server_ips: ROOT_SERVER_STRS
@@ -52,21 +47,21 @@ pub mod dns_server {
         }
 
         #[async_recursion]
-        pub async fn recursive_lookup<'a>(&self, out_buf: &[u8], ips: impl Iterator<Item = &'a Ipv4Addr> + std::marker::Send + 'async_recursion) -> io::Result<DnsPacket> {
+        pub async fn recursive_lookup<'a>(&self, out_buf: &[u8], ips: impl Iterator<Item = &'a Ipv4Addr> + std::marker::Send + 'async_recursion) -> io::Result<([u8;512], usize)> {
             for addr in ips {
                 println!("looking up ip: {:#?}", addr);
-                let packet = self.lookup(addr, &out_buf).await?;
+                let (buf, amt) = self.lookup(addr, &out_buf).await?;
+                let packet = DnsPacket::from_buf(&buf[..amt])?;
                 let res_code = packet.header.get_response_code();
                 if !packet.answers.is_empty() &&
                    (res_code == ResponseCode::NOERROR || res_code == ResponseCode::NXDOMAIN) {
-                    println!("finished");
-                    return Ok(packet);
-                }
+                    return Ok((buf, amt));
+}
                 else if packet.header.additional_count > 0 {
                     println!("starting recursive lookup with additional");
                     let ips = packet.get_resolved_ns(&packet.questions.first().expect("123").name);
-                    let packet = self.recursive_lookup(&out_buf, ips).await?;
-                    return Ok(packet);
+                    let res = self.recursive_lookup(&out_buf, ips).await?;
+                    return Ok(res);
                 }
                 else if packet.header.authoritiy_count > 0 {
                     println!("starting recursive lookup without additional");
@@ -79,11 +74,12 @@ pub mod dns_server {
                             query_type: QueryType::A,
                             class: 1,
                         });
-                        let (buf, bytes_written) = packet.to_buf()?;
-                        let packet_ns = self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await?;
+                        let (buf, amt) = packet.to_buf()?;
+                        let (buf_ns, amt_ns) = self.recursive_lookup(&buf[..amt], self.root_server_ips.iter()).await?;
+                        let packet_ns = DnsPacket::from_buf(&buf_ns[..amt_ns])?;
                         let ips = packet_ns.get_ipv4_iterator_answers();
-                        let packet = self.recursive_lookup(&out_buf, ips).await?;
-                        return Ok(packet);
+                        let res= self.recursive_lookup(&out_buf, ips).await?;
+                        return Ok(res);
                     }
                 }
                 else {
@@ -93,32 +89,37 @@ pub mod dns_server {
             return Err(Error::new(ErrorKind::InvalidInput, "rec lookup error"));
         }
 
-        pub async fn lookup(&self, addr: &Ipv4Addr, out_buf: &[u8]) -> io::Result<DnsPacket> {
+        pub async fn lookup(&self, addr: &Ipv4Addr, out_buf: &[u8]) -> io::Result<([u8;512], usize)> {
             self.lookup_socket.send_to(&out_buf, (*addr,53 as u16)).await?;
             let mut buf =  [0u8;512];
             let amt = self.lookup_socket.recv(&mut buf).await?;
-            Ok(DnsPacket::from_buf(&buf[0..amt])?)
+            Ok((buf, amt))
         }
 
         pub async fn resolve_request(self: Arc<Self>, client: SocketAddr, in_packet: DnsPacket) {
-            let out_packet = match in_packet.questions.first().unwrap().query_type {
-                QueryType::UNKOWN(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::NOTIMP)),
+            let (buf, amt) = match in_packet.questions.first().unwrap().query_type {
+                QueryType::UNKOWN(_) => {
+                    let packet = DnsPacket::new(Header::new(6969, true, true, ResponseCode::NOTIMP));
+                    packet.to_buf().unwrap()
+                },
                 _ =>  {
                     let (buf, bytes_written) = in_packet.to_buf().unwrap();
                     match self.recursive_lookup(&buf[..bytes_written], self.root_server_ips.iter()).await {
                         Ok(packet) => packet,
-                        Err(_) => DnsPacket::new(Header::new(6969, false, true, ResponseCode::SERVFAIL)),
+                        Err(_) => {
+                            let packet = DnsPacket::new(Header::new(6969, true, true, ResponseCode::SERVFAIL));
+                            packet.to_buf().unwrap()
+                        },
                     }
                 },
             };
-            let (buf, bytes_written) = out_packet.to_buf().unwrap();
-            self.client_socket.send_to(&buf[..bytes_written],client).await.unwrap();
+            self.client_socket.send_to(&buf[..amt],client).await.unwrap();
         }
 
         pub async fn start(self: Arc<Self>) {
             loop {
                 let mut buf =  [0u8;512];
-                let (amt, client) = self.client_socket.recv_from(&mut buf)
+                let (_, client) = self.client_socket.recv_from(&mut buf)
                     .await
                     .expect("could recv packet from client");
                 let in_packet = DnsPacket::from_buf(&buf)

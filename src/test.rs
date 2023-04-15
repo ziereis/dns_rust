@@ -122,7 +122,7 @@ mod tests {
         let header = Header::new(42, true, true, ResponseCode::NXDOMAIN);
         assert_eq!(header.id, 42);
         assert_eq!(header.get_query_response(), true);
-        assert_eq!(header.get_recursion_available(), true);
+        assert_eq!(header.get_recursion_desired(), true);
         assert_eq!(header.get_response_code(), ResponseCode::NXDOMAIN);
     }
 
@@ -241,8 +241,8 @@ mod tests {
         assert_eq!(parsed_packet.questions[0], question);
     }
 
-    #[test]
-    fn test_query_built_packet() {
+    #[tokio::test]
+    async fn test_query_built_packet() {
         let header = Header::new(42, true, false, ResponseCode::NOERROR);
         let mut packet = DnsPacket::new(header);
         let question = Question {
@@ -260,10 +260,9 @@ mod tests {
             bytes_written = builder.get_pos();
         }
         let ns = Ipv4Addr::from_str("198.41.0.4").unwrap();
-        let mut server = DnsServer::new("127.0.0.1:2053").unwrap();
+        let mut server = DnsServer::new("127.0.0.1:2053").await.unwrap();
         let mut out_buf = [0u8; 512];
-        let (amt, in_buf) = server.lookup(&ns, &buf[..bytes_written]).unwrap();
-        let mut packet = DnsPacket::from_buf(&in_buf[..amt]).unwrap();
+        let packet = server.lookup(&ns, &buf[..bytes_written]).await.unwrap();
 
         assert_eq!(packet.header.get_response_code(), ResponseCode::NOERROR);
     }

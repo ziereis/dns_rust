@@ -181,6 +181,13 @@ pub mod buffer {
             Ok(())
         }
 
+        pub fn set_u16(&mut self, val: u16, pos: usize) -> io::Result<()> {
+            self.ensure_space(2)?;
+            let bytes = val.to_be_bytes();
+            self.buf_view[pos..pos + 2].copy_from_slice(&bytes);
+            Ok(())
+        }
+
         pub fn write_u32(&mut self, val: u32) -> io::Result<()> {
             self.ensure_space(4)?;
             let bytes = val.to_be_bytes();

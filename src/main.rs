@@ -1,3 +1,5 @@
+extern crate core;
+
 use std::io;
 use std::sync::Arc;
 use crate::dns_server::dns_server::DnsServer;
@@ -5,6 +7,7 @@ use crate::dns_server::dns_server::DnsServer;
 
 pub mod dns_server;
 pub mod test;
+mod dns_cache;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

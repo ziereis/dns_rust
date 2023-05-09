@@ -3,7 +3,6 @@ pub mod dns_cache
 {
     use std::collections::{HashMap, HashSet};
     use std::hash::{Hash, Hasher};
-    use std::io;
     use std::sync::Mutex;
     use chrono::{Duration, Local, DateTime};
     use crate::dns_server::dns_packet::dns_packet::{Answer, DnsPacket, QueryType};
@@ -115,14 +114,16 @@ pub mod dns_cache
     }
 
 
-
+    #[cfg(test)]
     mod tests {
-        use std::net::{Ipv4Addr, Ipv6Addr};
-        use std::str::FromStr;
-        use std::time::Duration;
         use std::thread;
         use super::*;
         use crate::dns_server::dns_packet::dns_packet::{Answer, Record, Question, Header, ResponseCode};
+        use std::net::Ipv4Addr;
+        use std::str::FromStr;
+        use std::net::Ipv6Addr;
+
+
 
         #[test]
         fn test_dns_cache() {

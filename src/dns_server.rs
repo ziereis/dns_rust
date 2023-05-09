@@ -1,18 +1,17 @@
 pub mod dns_packet;
 
 pub mod dns_server {
-    use std::borrow::BorrowMut;
     use std::io;
     use tokio::time::timeout;
     use std::time::Duration;
     use std::io::{Error, ErrorKind};
-    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::net::UdpSocket;
     use async_recursion::async_recursion;
     use crate::dns_cache::dns_cache::DnsCache;
-    use crate::dns_server::dns_packet::dns_packet::{Answer, DnsPacket, Header, QueryType, Question, Record, ResponseCode};
+    use crate::dns_server::dns_packet::dns_packet::{DnsPacket, Header, QueryType, Question, Record, ResponseCode};
 
     const ROOT_SERVER_STRS: [&str; 13] = ["198.41.0.4",
                                         "199.9.14.201",
@@ -104,7 +103,6 @@ pub mod dns_server {
 
         pub async fn iterative_cache_resolve(&self, name: &str, out_buf: &[u8]) -> io::Result<DnsPacket> {
             let labels: Vec<&str> = name.split('.').collect();
-            println!("{:#?}",self.cache);
             for label_idx in 0..labels.len() {
                 let domain = labels[label_idx..].join(".");
                 if let Some(nss) = self.cache.get(&domain, &QueryType::NS) {
@@ -145,6 +143,7 @@ pub mod dns_server {
             } else {
                 let question = query.questions.first().unwrap();
                 if let Some(cached) = self.cache.get(&question.name, &question.query_type) {
+                    println!("found in cache");
                     response = DnsPacket::new(header);
                     response.set_questions(query.questions);
                     response.set_answers(cached);

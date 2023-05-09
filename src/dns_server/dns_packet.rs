@@ -2,9 +2,7 @@ pub(crate) mod buffer;
 
 pub mod dns_packet {
     use std::{fmt, io};
-    use std::iter::Chain;
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::slice::Iter;
     use crate::dns_server::dns_packet::buffer::buffer::{BufferBuilder, BufferParser};
 
     pub mod flags {
@@ -328,7 +326,7 @@ pub mod dns_packet {
                 }
                 Record::NS(name) | Record::CNAME(name) => {
                     let pos = builder.get_pos();
-                    builder.write_u16(0);
+                    builder.write_u16(0)?;
                     builder.write_name(name)?;
                     builder.set_u16( (builder.get_pos() - (pos+2))as u16, pos)?;
                 }

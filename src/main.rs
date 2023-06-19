@@ -1,22 +1,17 @@
+extern crate core;
+
 use std::io;
-use std::net::UdpSocket;
-use crate::dns_server::dns_packet::dns_packet::DnsPacket;
+use std::sync::Arc;
 use crate::dns_server::dns_server::DnsServer;
+
 
 pub mod dns_server;
 pub mod test;
+mod dns_cache;
 
-
-fn main() -> io::Result<()> {
-    let mut server = DnsServer::new("127.0.0.1:2053")?;
-    server.start();
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let server = Arc::new(DnsServer::new("127.0.0.1:2053").await?);
+    server.start().await;
     Ok(())
-
-
-/*    let client_socket = UdpSocket::bind("127.0.0.1:2053")?;
-    let mut buf = [0u8; 512];
-    let (amt, client) = client_socket.recv_from(&mut buf)?;
-    let in_packet = DnsPacket::from_buf(&buf)?;
-    println!("{:#?}", in_packet);
-    Ok(())
-*/}
+}

@@ -66,7 +66,7 @@ pub mod dns_packet {
         }
     }
 
-    #[derive(Debug, PartialEq, Eq, Clone)]
+    #[derive(Debug, PartialEq, Eq, Clone, Hash)]
     pub enum QueryType {
         UNKOWN(u16),
         A,
@@ -275,7 +275,7 @@ pub mod dns_packet {
         }
     }
 
-    #[derive(Debug, PartialEq, Eq, Clone)]
+    #[derive(Debug, PartialEq, Eq, Clone, Hash)]
     pub enum Record {
         A(Ipv4Addr),
         NS(String),
@@ -321,16 +321,23 @@ pub mod dns_packet {
         pub fn write_to_buf(&self, builder: &mut BufferBuilder) -> io::Result<()> {
             match self {
                 Record::A(addr) => {
+                    builder.write_u16(4)?;
                     builder.write_u32(u32::from(*addr))?;
                 }
                 Record::NS(name) | Record::CNAME(name) => {
+                    let pos = builder.get_pos();
+                    builder.write_u16(0)?;
                     builder.write_name(name)?;
+                    builder.set_u16( (builder.get_pos() - (pos+2))as u16, pos)?;
                 }
                 Record::MX { priority, host } => {
+                    let pos = builder.get_pos();
                     builder.write_u16(*priority)?;
                     builder.write_name(host)?;
+                    builder.set_u16( (builder.get_pos() - (pos+2)) as u16, pos)?;
                 }
                 Record::AAAA(addr) => {
+                    builder.write_u16(16)?;
                     builder.write_u128(u128::from(*addr))?;
                 }
                 Record::UNKOWN(_) => {
@@ -342,7 +349,7 @@ pub mod dns_packet {
     }
 
 
-    #[derive(Debug, PartialEq, Eq, Clone)]
+    #[derive(Debug, PartialEq, Eq, Clone, Hash)]
     pub struct Answer {
         pub name: String,
         pub query_type: QueryType,
@@ -374,7 +381,6 @@ pub mod dns_packet {
             builder.write_u16(self.query_type.to_u16())?;
             builder.write_u16(self.class)?;
             builder.write_u32(self.ttl)?;
-            builder.write_u16(self.len)?;
             self.record.write_to_buf(builder)?;
             Ok(())
         }
@@ -453,9 +459,17 @@ pub mod dns_packet {
             self.questions.push(question);
             self.header.question_count += 1;
         }
+        pub fn set_questions(&mut self, questions: Vec<Question>) {
+            self.questions = questions;
+            self.header.question_count = self.questions.len() as u16;
+        }
         pub fn add_answer(&mut self, answer: Answer) {
             self.answers.push(answer);
             self.header.answer_count += 1;
+        }
+        pub fn set_answers(&mut self, answers: Vec<Answer>) {
+            self.answers = answers;
+            self.header.answer_count = self.answers.len() as u16;
         }
         pub fn add_authority(&mut self, auth: Answer) {
             self.authorities.push(auth);
@@ -481,6 +495,18 @@ pub mod dns_packet {
                 a.write_to_buf(builder)?
             }
             Ok(())
+        }
+
+        pub fn to_buf(&self) -> io::Result<([u8;512], usize)> {
+            let mut buf = [0u8;512];
+            let bytes_written;
+            {
+                let mut builder =BufferBuilder::new(&mut buf);
+                self.write_to_buf(&mut builder)?;
+                bytes_written = builder.get_pos();
+            }
+
+            Ok((buf, bytes_written))
         }
 
         pub fn get_ipv4_iterator_additional<'a>(&'a self) -> impl Iterator<Item = (&Ipv4Addr, &'a str)> {
@@ -523,6 +549,13 @@ pub mod dns_packet {
 
         }
 
+        pub fn get_all_answers<'a>(&'a self, qname: &'a str) -> impl Iterator<Item=&'a Answer> {
+            std::iter::once(self.answers.iter())
+                .chain(std::iter::once(self.authorities.iter()))
+                .chain(std::iter::once(self.additional.iter()))
+                .flat_map(|x| x)
+                .filter(|x | qname.ends_with(&x.name))
+        }
     }
 
 }
